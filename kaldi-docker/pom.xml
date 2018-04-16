@@ -1,0 +1,210 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+    <groupId>com.veritas.asr</groupId>
+    <artifactId>asr-service</artifactId>
+    <version>0.1.0</version>
+    <modelVersion>4.0.0</modelVersion>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+        <java.version>1.8</java.version>
+
+        <!-- Maven plugins -->
+        <compilerplugin.version>2.5.1</compilerplugin.version>
+        <failsafe.version>2.19.1</failsafe.version>
+
+        <!-- Third-party dependencies -->
+        <apache.httpcomponents.version>4.5.5</apache.httpcomponents.version>
+        <java-websocket.version>1.3.0</java-websocket.version>
+        <json.version>20090211</json.version>
+
+        <!-- Testing -->
+        <testng.version>6.11</testng.version>
+        <assertj.version>3.8.0</assertj.version>
+
+        <!-- Docker settings -->
+        <docker.plugin.version>0.23.0</docker.plugin.version>
+        <docker.alias>asr</docker.alias>
+        <docker.repository.name>artifactory-asr-auto-images-releases.cto.veritas.com/${docker.alias}</docker.repository.name>
+        <docker.port>8080</docker.port>
+        <docker.address>localhost</docker.address>
+
+        <!-- Docker toolkit support -->
+        <!--<docker.toolkit.host>DOCKER_HOST value</docker.toolkit.host>-->
+        <!--<docker.toolkit.certPath>DOCKER_CERT_PATH value</docker.toolkit.certPath>-->
+        <!-- note: also change <docker.address> to the correct ip -->
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.apache.httpcomponents</groupId>
+            <artifactId>httpclient</artifactId>
+            <version>${apache.httpcomponents.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.java-websocket</groupId>
+            <artifactId>Java-WebSocket</artifactId>
+            <version>${java-websocket.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.json</groupId>
+            <artifactId>json</artifactId>
+            <version>${json.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.testng</groupId>
+            <artifactId>testng</artifactId>
+            <version>${testng.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <version>${assertj.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>${compilerplugin.version}</version>
+                <configuration>
+                    <source>${java.version}</source>
+                    <target>${java.version}</target>
+                </configuration>
+            </plugin>
+
+            <plugin>
+                <groupId>io.fabric8</groupId>
+                <artifactId>docker-maven-plugin</artifactId>
+                <version>${docker.plugin.version}</version>
+                <configuration>
+                    <dockerHost>${docker.toolkit.host}</dockerHost>
+                    <certPath>${docker.toolkit.certPath}</certPath>
+                    <useColor>true</useColor>
+                    <images>
+                        <image>
+                            <alias>${docker.alias}</alias>
+                            <name>${docker.repository.name}:${project.version}</name>
+                            <build>
+                                <from>jcsilva/docker-kaldi-gstreamer-server:latest</from>
+                                <!-- compress all the runCmds into a single RUN directive so that only one image layer is created -->
+                                <optimise>true</optimise>
+
+                                <!-- Copy all of the required files to the docker container-->
+                                <assembly>
+                                    <descriptor>docker-assembly.xml</descriptor>
+                                    <targetDir>/</targetDir>
+                                </assembly>
+
+                                <!-- Commands run when the image is being built (not when the container is started) -->
+                                <runCmds>
+                                    <run>mkdir -p /opt/models</run>
+                                    <run>mkdir -p /opt/logs</run>
+
+                                    <run>wget --no-check-certificate https://phon.ioc.ee/~tanela/tedlium_nnet_ms_sp_online.tgz -P /opt/models/</run>
+                                    <run>tar -zxvf /opt/models/tedlium_nnet_ms_sp_online.tgz -C /opt/models/</run>
+                                    <run>rm -f /opt/models/tedlium_nnet_ms_sp_online.tgz </run>
+                                    <run>find /opt/models/ -type f -iname '*.conf' -o -iname '*.yaml' | xargs sed -i 's:test:/opt:g'</run>
+
+                                    <run>apt-get update</run>
+                                    <run>apt-get -y install supervisor</run>
+                                    <run>apt-get clean autoclean</run>
+                                    <run>apt-get autoremove -y</run>
+                                    <run>rm -rf /var/lib/apt/lists/*</run>
+                                </runCmds>
+
+                                <!-- Expose ports -->
+                                <ports>
+                                    <port>${docker.port}</port>
+                                </ports>
+
+                                <!-- Run when the container is started -->
+                                <cmd>
+                                    <shell>/usr/bin/supervisord</shell>
+                                </cmd>
+
+                            </build>
+
+                            <run>
+                                <namingStrategy>alias</namingStrategy>
+                                <privileged>false</privileged>
+
+                                <ports>
+                                    <port>${docker.port}:80</port>
+                                </ports>
+
+                                <wait>
+                                    <http>
+                                        <url>http://${docker.address}:${docker.port}</url>
+                                        <method>GET</method>
+                                    </http>
+                                    <time>30000</time>
+                                </wait>
+                            </run>
+                        </image>
+                    </images>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>build</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>build</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>start</id>
+                        <phase>pre-integration-test</phase>
+                        <goals>
+                            <goal>stop</goal>
+                            <goal>start</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>stop</id>
+                        <phase>post-integration-test</phase>
+                        <goals>
+                            <goal>stop</goal>
+                        </goals>
+                        <configuration>
+                            <keepContainer>true</keepContainer>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <version>${failsafe.version}</version>
+                <configuration>
+                    <workingDirectory>${project.build.directory}</workingDirectory>
+                    <systemPropertyVariables>
+                        <docker.port>${docker.port}</docker.port>
+                        <docker.address>${docker.address}</docker.address>
+                    </systemPropertyVariables>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+
+    </build>
+
+</project>
